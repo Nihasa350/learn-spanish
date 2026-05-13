@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>code-training</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>code-training</h1>
+      <nav class="topics">
+        <button class="topic active" data-topic="bash">bash</button>
+      </nav>
+    </header>
+
+    <section class="controls">
+      <div class="control-group">
+        <label>Mode</label>
+        <div class="seg" role="tablist" aria-label="Mode">
+          <button class="seg-btn active" data-mode="flash">Flashcards</button>
+          <button class="seg-btn" data-mode="mc">Multiple choice</button>
+          <button class="seg-btn" data-mode="ex">Exercises</button>
+          <button class="seg-btn" data-mode="ref">Reference</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label for="tag-filter">Filter</label>
+        <select id="tag-filter">
+          <option value="">All tags</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label>
+          <input type="checkbox" id="weak-only" />
+          <span>Focus weak cards</span>
+        </label>
+      </div>
+
+      <div class="control-group push-right">
+        <button id="reset-progress" class="ghost" title="Clear your saved progress for this topic">Reset progress</button>
+      </div>
+    </section>
+
+    <main>
+      <!-- Flashcard mode -->
+      <section id="flash-view" class="view active" aria-label="Flashcards">
+        <div class="card" id="flash-card">
+          <div class="card-face card-front">
+            <div class="card-label">Prompt</div>
+            <div class="card-text" id="flash-prompt">Loading…</div>
+            <div class="card-hint">Press <kbd>Space</kbd> to reveal</div>
+          </div>
+          <div class="card-face card-back" hidden>
+            <div class="card-label">Answer</div>
+            <code class="card-answer" id="flash-answer"></code>
+            <div class="card-explain" id="flash-explain"></div>
+            <div class="card-hint">How did you do?</div>
+          </div>
+        </div>
+
+        <div class="rate-row" id="flash-rate" hidden>
+          <button class="rate hard" data-rate="hard">Got it wrong <span class="kbd">1</span></button>
+          <button class="rate ok" data-rate="ok">Knew it <span class="kbd">2</span></button>
+        </div>
+
+        <div class="row">
+          <button id="flash-reveal" class="primary">Reveal answer <span class="kbd">Space</span></button>
+          <button id="flash-skip" class="ghost">Skip <span class="kbd">S</span></button>
+        </div>
+      </section>
+
+      <!-- Exercise mode (typing into a simulated shell) -->
+      <section id="ex-view" class="view" aria-label="Exercises">
+        <div class="card">
+          <div class="card-label">Exercise</div>
+          <div class="card-text" id="ex-prompt">Loading…</div>
+          <div class="ex-context" id="ex-context" hidden></div>
+          <div class="ex-hint" id="ex-hint" hidden></div>
+        </div>
+
+        <div class="terminal" id="terminal">
+          <div class="term-output" id="term-output"></div>
+          <div class="term-line">
+            <span class="term-prompt" id="term-prompt">user@box:~$</span>
+            <input
+              class="term-input"
+              id="term-input"
+              type="text"
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+              aria-label="Shell command"
+            />
+          </div>
+        </div>
+
+        <div class="ex-feedback" id="ex-feedback" hidden></div>
+
+        <div class="row">
+          <button id="ex-reset" class="ghost">Reset</button>
+          <button id="ex-hint-btn" class="ghost" hidden>Hint</button>
+          <button id="ex-show-answer" class="ghost">Show answer</button>
+          <button id="ex-skip" class="ghost">Skip</button>
+          <button id="ex-next" class="primary" hidden>Next <span class="kbd">Enter</span></button>
+        </div>
+      </section>
+
+      <!-- Reference mode (browse all commands) -->
+      <section id="ref-view" class="view" aria-label="Reference">
+        <div class="ref-layout">
+          <aside class="ref-sidebar">
+            <input
+              id="ref-search"
+              class="ref-search"
+              type="search"
+              placeholder="Filter commands…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <div id="ref-list" class="ref-list"></div>
+          </aside>
+          <div id="ref-detail" class="ref-detail">
+            <div class="ref-detail-empty">Pick a command on the left.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Multiple choice mode -->
+      <section id="mc-view" class="view" aria-label="Multiple choice">
+        <div class="card">
+          <div class="card-label">Pick the right command</div>
+          <div class="card-text" id="mc-prompt">Loading…</div>
+          <div class="mc-choices" id="mc-choices"></div>
+          <div class="mc-feedback" id="mc-feedback" hidden></div>
+        </div>
+        <div class="row">
+          <button id="mc-next" class="primary" hidden>Next <span class="kbd">Enter</span></button>
+        </div>
+      </section>
+    </main>
+
+    <!-- Inline command explainer modal (opens from chips on flashcards/MC/exercises) -->
+    <div id="modal" class="modal" hidden aria-hidden="true">
+      <div class="modal-backdrop" data-close="1"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <button class="modal-close" data-close="1" aria-label="Close">×</button>
+        <div id="modal-body"></div>
+      </div>
+    </div>
+
+    <footer class="stats">
+      <span><strong id="stat-seen">0</strong> seen</span>
+      <span><strong id="stat-correct">0</strong> correct</span>
+      <span><strong id="stat-wrong">0</strong> wrong</span>
+      <span class="dim" id="stat-pool">0 cards in pool</span>
+    </footer>
+
+    <!-- Engine + data files: one per topic. Add more here as topics grow. -->
+    <script src="shell.js"></script>
+    <script src="data/bash.js"></script>
+    <script src="data/bash-exercises.js"></script>
+    <script src="data/bash-concepts.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
