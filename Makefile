@@ -1,4 +1,4 @@
-# code-training: run shortcuts.
+# learn-spanish: run shortcuts.
 # Override ports: `make serve PORT=9000`, `make up PORT=9090`.
 
 PORT ?= 8000
@@ -29,7 +29,7 @@ down:
 	docker compose down
 
 build:
-	docker build -t code-training .
+	docker build -t learn-spanish .
 
 rebuild:
 	PORT=$(DOCKER_PORT) docker compose -f docker-compose.build.yml up -d --build

@@ -3,14 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>code-training</title>
+    <title>learn-spanish</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
     <header>
-      <h1>code-training</h1>
+      <h1>learn-spanish 🇪🇸</h1>
       <nav class="topics">
-        <button class="topic active" data-topic="bash">bash</button>
+        <button class="topic active" data-topic="vocab">Vocabulario</button>
+        <button class="topic" data-topic="verbs">Verbos</button>
+        <button class="topic" data-topic="conversations">Conversaciones</button>
       </nav>
     </header>
 
@@ -20,8 +22,8 @@
         <div class="seg" role="tablist" aria-label="Mode">
           <button class="seg-btn active" data-mode="flash">Flashcards</button>
           <button class="seg-btn" data-mode="mc">Multiple choice</button>
-          <button class="seg-btn" data-mode="ex">Exercises</button>
           <button class="seg-btn" data-mode="ref">Reference</button>
+          <button class="seg-btn" data-mode="search">Search <span class="kbd">/</span></button>
         </div>
       </div>
 
@@ -55,7 +57,7 @@
           </div>
           <div class="card-face card-back" hidden>
             <div class="card-label">Answer</div>
-            <code class="card-answer" id="flash-answer"></code>
+            <div class="card-answer" id="flash-answer" lang="es"></div>
             <div class="card-explain" id="flash-explain"></div>
             <div class="card-hint">How did you do?</div>
           </div>
@@ -72,44 +74,7 @@
         </div>
       </section>
 
-      <!-- Exercise mode (typing into a simulated shell) -->
-      <section id="ex-view" class="view" aria-label="Exercises">
-        <div class="card">
-          <div class="card-label">Exercise</div>
-          <div class="card-text" id="ex-prompt">Loading…</div>
-          <div class="ex-context" id="ex-context" hidden></div>
-          <div class="ex-hint" id="ex-hint" hidden></div>
-        </div>
-
-        <div class="terminal" id="terminal">
-          <div class="term-output" id="term-output"></div>
-          <div class="term-line">
-            <span class="term-prompt" id="term-prompt">user@box:~$</span>
-            <input
-              class="term-input"
-              id="term-input"
-              type="text"
-              autocomplete="off"
-              autocapitalize="off"
-              autocorrect="off"
-              spellcheck="false"
-              aria-label="Shell command"
-            />
-          </div>
-        </div>
-
-        <div class="ex-feedback" id="ex-feedback" hidden></div>
-
-        <div class="row">
-          <button id="ex-reset" class="ghost">Reset</button>
-          <button id="ex-hint-btn" class="ghost" hidden>Hint</button>
-          <button id="ex-show-answer" class="ghost">Show answer</button>
-          <button id="ex-skip" class="ghost">Skip</button>
-          <button id="ex-next" class="primary" hidden>Next <span class="kbd">Enter</span></button>
-        </div>
-      </section>
-
-      <!-- Reference mode (browse all commands) -->
+      <!-- Reference mode (grammar notes) -->
       <section id="ref-view" class="view" aria-label="Reference">
         <div class="ref-layout">
           <aside class="ref-sidebar">
@@ -117,22 +82,35 @@
               id="ref-search"
               class="ref-search"
               type="search"
-              placeholder="Filter commands…"
+              placeholder="Search…"
               autocomplete="off"
               spellcheck="false"
             />
             <div id="ref-list" class="ref-list"></div>
           </aside>
           <div id="ref-detail" class="ref-detail">
-            <div class="ref-detail-empty">Pick a command on the left.</div>
+            <div class="ref-detail-empty">Pick a topic on the left.</div>
           </div>
         </div>
+      </section>
+
+      <!-- Search mode (phrases from every deck, conversation and grammar example) -->
+      <section id="search-view" class="view" aria-label="Search">
+        <input
+          id="search-input"
+          class="ref-search search-input"
+          type="search"
+          placeholder="Search English or Spanish, e.g. “how much” or “cuanto”"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div id="search-results" class="search-results"></div>
       </section>
 
       <!-- Multiple choice mode -->
       <section id="mc-view" class="view" aria-label="Multiple choice">
         <div class="card">
-          <div class="card-label">Pick the right command</div>
+          <div class="card-label">Pick the Spanish</div>
           <div class="card-text" id="mc-prompt">Loading…</div>
           <div class="mc-choices" id="mc-choices"></div>
           <div class="mc-feedback" id="mc-feedback" hidden></div>
@@ -143,7 +121,7 @@
       </section>
     </main>
 
-    <!-- Inline command explainer modal (opens from chips on flashcards/MC/exercises) -->
+    <!-- Inline grammar modal (opens from ⓘ chips on flashcards/MC) -->
     <div id="modal" class="modal" hidden aria-hidden="true">
       <div class="modal-backdrop" data-close="1"></div>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -159,11 +137,11 @@
       <span class="dim" id="stat-pool">0 cards in pool</span>
     </footer>
 
-    <!-- Engine + data files: one per topic. Add more here as topics grow. -->
-    <script src="shell.js"></script>
-    <script src="data/bash.js"></script>
-    <script src="data/bash-exercises.js"></script>
-    <script src="data/bash-concepts.js"></script>
+    <!-- Data files. Order matters: grammar.js reads verbs.js; conversations.js adds pages to grammar.js. -->
+    <script src="data/vocab.js"></script>
+    <script src="data/verbs.js"></script>
+    <script src="data/grammar.js"></script>
+    <script src="data/conversations.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -1,6 +1,7 @@
 FROM nginx:alpine
 
-COPY index.html style.css app.js shell.js /usr/share/nginx/html/
+COPY index.html style.css app.js /usr/share/nginx/html/
 COPY data/ /usr/share/nginx/html/data/
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80

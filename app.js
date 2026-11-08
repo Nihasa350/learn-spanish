@@ -1,114 +1,102 @@
-// code-training: tiny flashcard + MC engine, no build step.
+// learn-spanish: tiny flashcard + multiple-choice engine, no build step.
 //
-// Data is loaded from window.<TOPIC>_CARDS globals (see data/bash.js).
-// Per-card progress (right/wrong counts + last-seen) is persisted to
-// localStorage under key `ct:progress:<topic>` so weak cards resurface more.
+// Decks are loaded from window.<DECK>_CARDS globals (see data/vocab.js and
+// data/verbs.js). Per-card progress (right/wrong counts + last-seen) is
+// persisted to localStorage under `ls:progress:<topic>` so weak cards
+// resurface more.
 
 const TOPICS = {
-  bash: () => window.BASH_CARDS || [],
-};
-
-const EXERCISES = {
-  bash: () => window.BASH_EXERCISES || [],
+  vocab: () => window.VOCAB_CARDS || [],
+  verbs: () => window.VERB_CARDS || [],
+  conversations: () => window.CONVERSATION_CARDS || [],
 };
 
 const state = {
-  topic: "bash",
-  mode: "flash",        // "flash" | "mc" | "ex"
+  topic: "vocab",
+  mode: "flash",        // "flash" | "mc" | "ref"
   tag: "",              // active tag filter, "" = all
   weakOnly: false,
-  pool: [],             // filtered cards (flash/mc)
-  exPool: [],           // filtered exercises
+  pool: [],             // filtered cards
   current: null,
   flipped: false,
   mc: { choices: [], answered: false, correctIndex: -1 },
-  ex: {
-    current: null,      // current exercise
-    shell: null,        // shell instance
-    history: [],        // strings: lines entered this attempt
-    lastResult: null,   // last { stdout, error }
-    solved: false,
-    revealed: false,
-  },
   session: { seen: 0, correct: 0, wrong: 0 },
   progress: {},         // { [cardId]: { right, wrong, last } }
 };
 
-// ---------- Concepts (Reference + inline lookup) ----------
+// ---------- Grammar concepts (Reference + inline ⓘ lookup) ----------
 function getConcept(name) {
-  const concepts = window.BASH_CONCEPTS || {};
+  const concepts = window.GRAMMAR_CONCEPTS || {};
   return concepts[name] || null;
 }
 
-// Pull command names out of an answer string for "look up" chips.
-// e.g. "grep ERROR access.log | wc -l" → ["grep", "wc"]
-// Operators (>, >>, |, 2>) are also surfaced if they have a concept entry.
-function extractCommands(text) {
-  if (!text) return [];
-  const concepts = window.BASH_CONCEPTS || {};
-  const found = [];
-  const seen = new Set();
-  const add = name => {
-    if (!name || seen.has(name) || !(name in concepts)) return;
-    seen.add(name); found.push(name);
-  };
-  // Operators
-  if (/(^|\s)>>(\s|$)/.test(text)) add(">>");
-  else if (/(^|\s)>(\s|$)/.test(text)) add(">");
-  if (/2>/.test(text)) add("2>");
-  if (/\|/.test(text)) add("|");
-  // Commands: first word of each pipe/&&/; segment
-  for (const seg of text.split(/\||&&|;|\n/)) {
-    const tokens = seg.trim().split(/\s+/);
-    let i = 0;
-    while (i < tokens.length && /^[A-Z_]+=/.test(tokens[i])) i++; // skip env-var prefixes
-    if (tokens[i] === "sudo") i++;
-    add(tokens[i]);
-  }
-  return found;
+// Concept keys a card links to, filtered to ones that exist.
+function cardConcepts(card) {
+  return ((card && card.concepts) || []).filter(k => getConcept(k));
 }
 
-function cmdChipHTML(name) {
-  return `<button class="cmd-chip" type="button" data-concept="${escapeHtml(name)}">${escapeHtml(name)}</button>`;
+// Display name: dialogue pages have a title; grammar notes use their key.
+function conceptLabel(name) {
+  const c = getConcept(name);
+  return (c && c.title) || name;
 }
 
-function explainRowHTML(commands, label = "Look up") {
-  if (!commands || commands.length === 0) return "";
-  const chips = commands.map(cmdChipHTML).join("");
+function conceptChipHTML(name) {
+  return `<button class="cmd-chip" type="button" data-concept="${escapeHtml(name)}">${escapeHtml(conceptLabel(name))}</button>`;
+}
+
+function dialogueHTML(lines) {
+  return `<div class="dialogue">${
+    lines.map(l => `
+      <div class="dlg-line${l.you ? " you" : ""}">
+        <div class="dlg-who">${escapeHtml(l.who)}</div>
+        <div class="dlg-es" lang="es">${escapeHtml(l.es)}</div>
+        <div class="dlg-en">${escapeHtml(l.en)}</div>
+      </div>`).join("")
+  }</div>`;
+}
+
+function explainRowHTML(concepts, label = "Look up") {
+  if (!concepts || concepts.length === 0) return "";
+  const chips = concepts.map(conceptChipHTML).join("");
   return `<div class="explain-row"><span>${escapeHtml(label)}:</span>${chips}</div>`;
 }
 
 function conceptDetailHTML(name) {
   const c = getConcept(name);
-  if (!c) return `<div class="ref-detail-empty">No reference for <code>${escapeHtml(name)}</code>.</div>`;
-  const flags = (c.flags && c.flags.length)
-    ? `<div class="ref-section"><h3>Common flags</h3><div class="ref-flags">${
-        c.flags.map(f =>
-          `<div class="ref-flag"><code>${escapeHtml(f.flag)}</code><span class="desc">${escapeHtml(f.desc)}</span></div>`
+  if (!c) return `<div class="ref-detail-empty">No notes for <code>${escapeHtml(name)}</code>.</div>`;
+  const table = (c.table && c.table.length)
+    ? `<div class="ref-section"><h3>${escapeHtml(c.tableTitle || "Overview")}</h3><div class="ref-flags">${
+        c.table.map(r =>
+          `<div class="ref-flag"><code>${escapeHtml(r.label)}</code><span class="desc" lang="es">${escapeHtml(r.value)}</span></div>`
         ).join("")
       }</div></div>`
     : "";
   const examples = (c.examples && c.examples.length)
     ? `<div class="ref-section"><h3>Examples</h3><div class="ref-examples">${
         c.examples.map(e =>
-          `<div class="ref-example"><span class="cmd">${escapeHtml(e.cmd)}</span>${
-            e.note ? `<span class="note">— ${escapeHtml(e.note)}</span>` : ""
+          `<div class="ref-example"><span class="cmd" lang="es">${escapeHtml(e.es)}</span>${
+            e.en ? `<span class="note">— ${escapeHtml(e.en)}</span>` : ""
           }</div>`
         ).join("")
       }</div></div>`
     : "";
+  const dialogue = (c.dialogue && c.dialogue.length)
+    ? `<div class="ref-section"><h3>Conversation</h3>${dialogueHTML(c.dialogue)}</div>`
+    : "";
   const seeAlso = (c.seeAlso && c.seeAlso.length)
     ? `<div class="ref-section"><h3>See also</h3><div class="ref-also">${
-        c.seeAlso.map(cmdChipHTML).join("")
+        c.seeAlso.map(conceptChipHTML).join("")
       }</div></div>`
     : "";
   return `
     <div>
-      <span class="ref-cmd">${escapeHtml(name)}</span>
+      <span class="ref-cmd">${escapeHtml(conceptLabel(name))}</span>
       <div class="ref-summary">${escapeHtml(c.summary || "")}</div>
     </div>
-    ${c.description ? `<div class="ref-section"><h3>What it does</h3><div class="ref-desc">${escapeHtml(c.description)}</div></div>` : ""}
-    ${flags}
+    ${c.description ? `<div class="ref-section"><h3>Notes</h3><div class="ref-desc">${escapeHtml(c.description)}</div></div>` : ""}
+    ${table}
+    ${dialogue}
     ${examples}
     ${seeAlso}
   `;
@@ -129,8 +117,8 @@ function closeModal() {
 
 // ---------- Reference view ----------
 function renderRef(initialCommand) {
-  const concepts = window.BASH_CONCEPTS || {};
-  const order = window.BASH_CATEGORY_ORDER || [];
+  const concepts = window.GRAMMAR_CONCEPTS || {};
+  const order = window.GRAMMAR_CATEGORY_ORDER || [];
   const list = document.getElementById("ref-list");
   const search = (document.getElementById("ref-search").value || "").trim().toLowerCase();
 
@@ -138,7 +126,8 @@ function renderRef(initialCommand) {
   const byCat = {};
   for (const [name, c] of Object.entries(concepts)) {
     if (search) {
-      const hay = (name + " " + (c.summary || "") + " " + (c.description || "")).toLowerCase();
+      const lines = (c.dialogue || []).map(l => l.es + " " + l.en).join(" ");
+      const hay = [name, c.title, c.summary, c.description, lines].join(" ").toLowerCase();
       if (!hay.includes(search)) continue;
     }
     const cat = c.category || "Other";
@@ -156,7 +145,7 @@ function renderRef(initialCommand) {
       const btn = document.createElement("button");
       btn.className = "ref-item";
       btn.dataset.concept = name;
-      btn.innerHTML = `<span>${escapeHtml(name)}</span><span class="ri-summary">${escapeHtml(concepts[name].summary || "")}</span>`;
+      btn.innerHTML = `<span>${escapeHtml(conceptLabel(name))}</span><span class="ri-summary">${escapeHtml(concepts[name].summary || "")}</span>`;
       btn.addEventListener("click", () => selectRef(name));
       list.appendChild(btn);
     }
@@ -177,7 +166,7 @@ function selectRef(name) {
 }
 
 // ---------- Persistence ----------
-function progressKey(topic) { return `ct:progress:${topic}`; }
+function progressKey(topic) { return `ls:progress:${topic}`; }
 
 function loadProgress() {
   try {
@@ -212,9 +201,13 @@ function applyFilters(items) {
 
 function rebuildPool() {
   state.pool = applyFilters(TOPICS[state.topic]());
-  state.exPool = applyFilters(EXERCISES[state.topic]());
+  updatePoolStat();
+}
+
+function updatePoolStat() {
   const stat = document.getElementById("stat-pool");
-  if (state.mode === "ex") stat.textContent = `${state.exPool.length} exercises in pool`;
+  if (state.mode === "ref") stat.textContent = `${Object.keys(window.GRAMMAR_CONCEPTS || {}).length} reference pages`;
+  else if (state.mode === "search") stat.textContent = `${getSearchIndex().length} searchable phrases`;
   else stat.textContent = `${state.pool.length} cards in pool`;
 }
 
@@ -245,10 +238,7 @@ function pickNext(pool, prevId) {
   return pickFrom(pool);
 }
 
-function pickCard() { return pickFrom(state.pool); }
 function pickNextCard(prevId) { return pickNext(state.pool, prevId); }
-function pickExercise() { return pickFrom(state.exPool); }
-function pickNextExercise(prevId) { return pickNext(state.exPool, prevId); }
 
 // ---------- Flashcard view ----------
 function renderFlash() {
@@ -275,16 +265,11 @@ function flipFlash() {
   document.getElementById("flash-reveal").hidden = true;
   document.getElementById("flash-rate").hidden = false;
 
-  // Surface command lookup chips for the answer
+  // Surface grammar lookup chips for the card
   const back = document.querySelector("#flash-card .card-back");
   back.querySelectorAll(":scope > .explain-row").forEach(el => el.remove());
-  const cmds = extractCommands(state.current.answer);
-  if (cmds.length) {
-    const div = document.createElement("div");
-    div.className = "explain-row";
-    div.innerHTML = `<span>Look up:</span>${cmds.map(cmdChipHTML).join("")}`;
-    back.insertBefore(div, back.querySelector(".card-hint"));
-  }
+  const row = explainRowHTML(cardConcepts(state.current));
+  if (row) back.querySelector(".card-hint").insertAdjacentHTML("beforebegin", row);
 }
 
 function rateFlash(rate) {
@@ -306,24 +291,30 @@ function skipFlash() {
 }
 
 // ---------- Multiple choice view ----------
+// Prefer distractors that share the most tags with the card, so a food word
+// gets other food words and "ser — yo" gets other forms of ser.
+function sampleDistractors(card, n) {
+  const tags = new Set(card.tags || []);
+  const byAnswer = new Map();
+  for (const c of TOPICS[state.topic]()) {
+    if (c.id === card.id || !c.answer || c.answer === card.answer) continue;
+    const score = (c.tags || []).filter(t => tags.has(t)).length + Math.random() * 0.9;
+    const prev = byAnswer.get(c.answer);
+    if (prev === undefined || score > prev) byAnswer.set(c.answer, score);
+  }
+  return [...byAnswer.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([answer]) => answer);
+}
+
 function buildChoices(card) {
   // If the card author supplied choices, use them; else sample distractors.
   let choices;
   if (card.choices && card.choices.length) {
     choices = [...new Set([card.answer, ...card.choices])].slice(0, 4);
   } else {
-    const all = TOPICS[state.topic]();
-    const pool = all
-      .filter(c => c.id !== card.id && c.answer && c.answer !== card.answer)
-      .map(c => c.answer);
-    const distractors = [];
-    const used = new Set();
-    while (distractors.length < 3 && pool.length > 0) {
-      const i = Math.floor(Math.random() * pool.length);
-      const v = pool.splice(i, 1)[0];
-      if (!used.has(v)) { used.add(v); distractors.push(v); }
-    }
-    choices = [card.answer, ...distractors];
+    choices = [card.answer, ...sampleDistractors(card, 3)];
   }
   // shuffle
   for (let i = choices.length - 1; i > 0; i--) {
@@ -353,7 +344,7 @@ function renderMC() {
     const btn = document.createElement("button");
     btn.className = "mc-choice";
     btn.dataset.index = String(i);
-    btn.innerHTML = `<span class="idx">${i + 1}</span><span>${escapeHtml(text)}</span>`;
+    btn.innerHTML = `<span class="idx">${i + 1}</span><span lang="es">${escapeHtml(text)}</span>`;
     btn.addEventListener("click", () => answerMC(i));
     wrap.appendChild(btn);
   });
@@ -379,10 +370,10 @@ function answerMC(i) {
 
   const fb = document.getElementById("mc-feedback");
   const explain = state.current.explain ? `<div>${escapeHtml(state.current.explain)}</div>` : "";
-  const lookup = explainRowHTML(extractCommands(state.current.answer));
+  const lookup = explainRowHTML(cardConcepts(state.current));
   fb.innerHTML = `
     <div class="label">${ok ? "Correct" : "Not quite"}</div>
-    <div><code>${escapeHtml(state.current.answer)}</code></div>
+    <div class="answer" lang="es">${escapeHtml(state.current.answer)}</div>
     ${explain}
     ${lookup}
   `;
@@ -398,174 +389,105 @@ function nextMC() {
   renderMC();
 }
 
-// ---------- Exercise view ----------
-function loadExercise(exercise) {
-  state.ex.current = exercise;
-  state.ex.shell = window.Shell.create(exercise.initial);
-  state.ex.history = [];
-  state.ex.lastResult = null;
-  state.ex.solved = false;
-  state.ex.revealed = false;
+// ---------- Search view ----------
+// One flat index of { es, en, note, source, concept } built from every deck,
+// every conversation line and every grammar example. Built lazily, once.
+const TOPIC_LABELS = { vocab: "Vocabulario", verbs: "Verbos", conversations: "Conversaciones" };
+let searchIndex = null;
+
+// Lowercase, strip accents and punctuation so "cuanto es" matches "¿Cuánto es?".
+function normalize(s) {
+  return String(s || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9ñ\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function renderExStatic() {
-  const ex = state.ex.current;
-  document.getElementById("ex-prompt").textContent = ex.prompt;
+function getSearchIndex() {
+  if (searchIndex) return searchIndex;
+  const entries = [];
+  const seen = new Set();
+  const add = (e) => {
+    const key = normalize(e.es) + "|" + normalize(e.en);
+    if (!e.es || seen.has(key)) return;
+    seen.add(key);
+    e.hay = normalize(`${e.es} ${(e.accept || []).join(" ")} ${e.en}`);
+    entries.push(e);
+  };
 
-  const ctx = document.getElementById("ex-context");
-  if (ex.context) { ctx.textContent = ex.context; ctx.hidden = false; }
-  else { ctx.hidden = true; }
-
-  const hintBtn = document.getElementById("ex-hint-btn");
-  const hint = document.getElementById("ex-hint");
-  hint.hidden = true;
-  hint.textContent = "";
-  if (ex.hint) { hintBtn.hidden = false; }
-  else { hintBtn.hidden = true; }
-
-  document.getElementById("term-output").innerHTML = "";
-  document.getElementById("ex-feedback").hidden = true;
-  document.getElementById("ex-next").hidden = true;
-  const input = document.getElementById("term-input");
-  input.value = "";
-  input.disabled = false;
-  updatePrompt();
-  input.focus();
-}
-
-function updatePrompt() {
-  const sh = state.ex.shell;
-  if (!sh) return;
-  const cwd = window.Shell.formatCwd(sh.state.cwd, sh.state.env.HOME);
-  document.getElementById("term-prompt").textContent = `user@box:${cwd}$`;
-}
-
-function termAppend(html) {
-  const out = document.getElementById("term-output");
-  const div = document.createElement("div");
-  div.innerHTML = html;
-  out.appendChild(div);
-  const term = document.getElementById("terminal");
-  term.scrollTop = term.scrollHeight;
-}
-
-function runExLine(line) {
-  if (!state.ex.shell) return;
-  const sh = state.ex.shell;
-  const cwd = window.Shell.formatCwd(sh.state.cwd, sh.state.env.HOME);
-  const prompt = `user@box:${cwd}$`;
-  termAppend(`<span class="echo"><span class="p">${escapeHtml(prompt)}</span> ${escapeHtml(line)}</span>`);
-  if (!line.trim()) return;
-
-  const result = sh.run(line);
-  state.ex.lastResult = result;
-  state.ex.history.push(line);
-
-  if (result.stdout && result.stdout !== "\x1b[CLEAR]") {
-    termAppend(escapeHtml(result.stdout.replace(/\n$/, "")));
+  // Vocabulary + verbs. Conversation cards are skipped: their lines are indexed below.
+  for (const topic of ["vocab", "verbs"]) {
+    for (const c of TOPICS[topic]()) {
+      add({
+        es: (c.lookup && c.lookup.es) || c.answer,
+        en: (c.lookup && c.lookup.en) || c.prompt,
+        accept: c.accept,
+        note: c.lookup ? "" : (c.explain || ""),
+        source: TOPIC_LABELS[topic],
+        concept: cardConcepts(c)[0] || null,
+      });
+    }
   }
-  if (result.stdout === "\x1b[CLEAR]") {
-    document.getElementById("term-output").innerHTML = "";
+  // Every line of every conversation, including the other speakers' lines.
+  for (const d of window.DIALOGUES || []) {
+    for (const l of d.lines) {
+      add({ es: l.es, en: l.en, accept: l.accept, note: l.note || "", source: d.title, concept: `dlg-${d.id}` });
+    }
   }
-  if (result.error) {
-    termAppend(`<span class="err">${escapeHtml(result.error)}</span>`);
+  // Grammar examples.
+  for (const [key, c] of Object.entries(window.GRAMMAR_CONCEPTS || {})) {
+    for (const ex of c.examples || []) {
+      add({ es: ex.es, en: ex.en, note: "", source: conceptLabel(key), concept: key });
+    }
   }
-  updatePrompt();
-
-  // Check expectations
-  const verdict = window.Shell.check(sh.state, result, state.ex.current.expect);
-  if (verdict.ok) markExSolved();
-  else if (result.error) showExFeedback(false, [result.error]);
-  else document.getElementById("ex-feedback").hidden = true;
+  searchIndex = entries;
+  return entries;
 }
 
-function markExSolved() {
-  if (state.ex.solved) return;
-  state.ex.solved = true;
-  state.session.seen += 1;
-  if (state.ex.revealed) {
-    state.session.wrong += 1;
-    recordResult(state.ex.current.id, false);
-  } else {
-    state.session.correct += 1;
-    recordResult(state.ex.current.id, true);
+// All query words must appear. Whole-phrase matches and shorter entries rank first.
+function searchPhrases(query, limit = 60) {
+  const q = normalize(query);
+  if (!q) return [];
+  const words = q.split(" ");
+  const scored = [];
+  for (const e of getSearchIndex()) {
+    if (!words.every(w => e.hay.includes(w))) continue;
+    let score = e.hay.length;
+    if (normalize(e.es) === q || normalize(e.en) === q) score -= 1000;
+    else if ((" " + e.hay + " ").includes(" " + q + " ")) score -= 500;
+    scored.push([score, e]);
   }
-  updateStats();
-  showExFeedback(true);
-  document.getElementById("ex-next").hidden = false;
-  document.getElementById("ex-next").focus();
+  return scored.sort((a, b) => a[0] - b[0]).slice(0, limit).map(([, e]) => e);
 }
 
-function showExFeedback(ok, reasons) {
-  const fb = document.getElementById("ex-feedback");
-  fb.hidden = false;
-  fb.classList.toggle("ok", !!ok);
-  fb.classList.toggle("bad", !ok);
-  if (ok) {
-    const expl = state.ex.current.answer
-      ? `<div>One way: <code>${escapeHtml(state.ex.current.answer)}</code></div>`
-      : "";
-    const lookup = explainRowHTML(extractCommands(state.ex.current.answer));
-    fb.innerHTML = `<div class="label">Solved</div>${expl}${lookup}`;
-  } else {
-    const list = (reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
-    fb.innerHTML = `<div class="label">Try again</div><ul>${list}</ul>`;
-  }
-}
-
-function resetExercise() {
-  if (!state.ex.current) return;
-  state.ex.shell.reset();
-  state.ex.history = [];
-  state.ex.lastResult = null;
-  state.ex.solved = false;
-  document.getElementById("term-output").innerHTML = "";
-  document.getElementById("ex-feedback").hidden = true;
-  document.getElementById("ex-next").hidden = true;
-  updatePrompt();
-  const input = document.getElementById("term-input");
-  input.disabled = false;
-  input.value = "";
-  input.focus();
-}
-
-function nextExercise() {
-  const prevId = state.ex.current ? state.ex.current.id : null;
-  const next = pickNextExercise(prevId);
-  if (!next) {
-    document.getElementById("ex-prompt").textContent = "No exercises match. Adjust the filter.";
-    document.getElementById("term-output").innerHTML = "";
-    document.getElementById("ex-feedback").hidden = true;
+function renderSearch() {
+  const input = document.getElementById("search-input");
+  const out = document.getElementById("search-results");
+  const q = input.value;
+  if (!normalize(q)) {
+    out.innerHTML = `<div class="ref-detail-empty">Type a word or phrase in English or Spanish. Accents are optional.</div>`;
     return;
   }
-  loadExercise(next);
-  renderExStatic();
-}
-
-function showExAnswer() {
-  if (!state.ex.current) return;
-  state.ex.revealed = true;
-  termAppend(
-    `<span class="echo">// answer: <code>${escapeHtml(state.ex.current.answer)}</code></span>`
-  );
-}
-
-function showExHint() {
-  if (!state.ex.current || !state.ex.current.hint) return;
-  const hint = document.getElementById("ex-hint");
-  hint.textContent = state.ex.current.hint;
-  hint.hidden = false;
-  state.ex.revealed = true; // counted as needing help
-}
-
-function skipExercise() {
-  if (state.ex.current && !state.ex.solved) {
-    state.session.seen += 1;
-    state.session.wrong += 1;
-    recordResult(state.ex.current.id, false);
-    updateStats();
+  const results = searchPhrases(q);
+  if (!results.length) {
+    out.innerHTML = `<div class="ref-detail-empty">Nothing found for “${escapeHtml(q)}”.</div>`;
+    return;
   }
-  nextExercise();
+  out.innerHTML = results.map(e => `
+    <div class="search-row">
+      <div class="search-text">
+        <div class="dlg-es" lang="es">${escapeHtml(e.es)}</div>
+        <div class="dlg-en">${escapeHtml(e.en)}</div>
+        ${e.note ? `<div class="search-note">${escapeHtml(e.note)}</div>` : ""}
+      </div>
+      <div class="search-source">${
+        e.concept
+          ? `<button class="cmd-chip" type="button" data-concept="${escapeHtml(e.concept)}">${escapeHtml(e.source)}</button>`
+          : `<span class="search-badge">${escapeHtml(e.source)}</span>`
+      }</div>
+    </div>`).join("");
 }
 
 // ---------- View / mode switching ----------
@@ -574,19 +496,33 @@ function setMode(mode) {
   document.querySelectorAll(".seg-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
   document.getElementById("flash-view").classList.toggle("active", mode === "flash");
   document.getElementById("mc-view").classList.toggle("active", mode === "mc");
-  document.getElementById("ex-view").classList.toggle("active", mode === "ex");
   document.getElementById("ref-view").classList.toggle("active", mode === "ref");
+  document.getElementById("search-view").classList.toggle("active", mode === "search");
   state.current = null;
 
-  const stat = document.getElementById("stat-pool");
-  if (mode === "ex") stat.textContent = `${state.exPool.length} exercises in pool`;
-  else if (mode === "ref") stat.textContent = `${Object.keys(window.BASH_CONCEPTS || {}).length} commands in reference`;
-  else stat.textContent = `${state.pool.length} cards in pool`;
+  updatePoolStat();
 
   if (mode === "flash") renderFlash();
   else if (mode === "mc") renderMC();
-  else if (mode === "ex") nextExercise();
   else if (mode === "ref") renderRef();
+  else if (mode === "search") {
+    renderSearch();
+    const input = document.getElementById("search-input");
+    input.focus();
+    input.select();
+  }
+}
+
+function setTopic(topic) {
+  if (!TOPICS[topic] || topic === state.topic) return;
+  state.topic = topic;
+  state.tag = "";
+  document.querySelectorAll(".topic").forEach(b => b.classList.toggle("active", b.dataset.topic === topic));
+  loadProgress();
+  populateTagFilter();
+  rebuildPool();
+  if (state.mode === "ref") setMode("flash");
+  else setMode(state.mode);
 }
 
 // ---------- Filters / stats ----------
@@ -594,7 +530,6 @@ function populateTagFilter() {
   const sel = document.getElementById("tag-filter");
   const tags = new Set();
   TOPICS[state.topic]().forEach(c => (c.tags || []).forEach(t => tags.add(t)));
-  EXERCISES[state.topic]().forEach(c => (c.tags || []).forEach(t => tags.add(t)));
   sel.innerHTML = '<option value="">All tags</option>';
   [...tags].sort().forEach(t => {
     const opt = document.createElement("option");
@@ -622,12 +557,15 @@ function wire() {
     btn.addEventListener("click", () => setMode(btn.dataset.mode));
   });
 
+  document.querySelectorAll(".topic").forEach(btn => {
+    btn.addEventListener("click", () => setTopic(btn.dataset.topic));
+  });
+
   function refreshAfterFilterChange() {
     rebuildPool();
     state.current = null;
     if (state.mode === "flash") renderFlash();
     else if (state.mode === "mc") renderMC();
-    else nextExercise();
   }
 
   document.getElementById("tag-filter").addEventListener("change", e => {
@@ -657,11 +595,7 @@ function wire() {
 
   document.getElementById("mc-next").addEventListener("click", nextMC);
 
-  document.getElementById("ex-reset").addEventListener("click", resetExercise);
-  document.getElementById("ex-show-answer").addEventListener("click", showExAnswer);
-  document.getElementById("ex-hint-btn").addEventListener("click", showExHint);
-  document.getElementById("ex-skip").addEventListener("click", skipExercise);
-  document.getElementById("ex-next").addEventListener("click", nextExercise);
+  document.getElementById("search-input").addEventListener("input", renderSearch);
 
   // Reference search re-renders the list on every keystroke
   document.getElementById("ref-search").addEventListener("input", () => {
@@ -673,29 +607,12 @@ function wire() {
     if (e.target.matches("[data-close]")) closeModal();
   });
 
-  // Delegate clicks on any .cmd-chip anywhere on the page → open the concept modal
+  // Delegate clicks on any ⓘ chip anywhere on the page → open the grammar modal
   document.addEventListener("click", e => {
     const chip = e.target.closest(".cmd-chip");
     if (chip && chip.dataset.concept) {
       e.preventDefault();
       openConceptModal(chip.dataset.concept);
-    }
-  });
-
-  const termInput = document.getElementById("term-input");
-  termInput.addEventListener("keydown", e => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      if (state.ex.solved) { nextExercise(); return; }
-      const line = termInput.value;
-      termInput.value = "";
-      runExLine(line);
-    }
-  });
-  // Focus the input when the terminal area is clicked.
-  document.getElementById("terminal").addEventListener("click", () => {
-    if (state.mode === "ex" && !state.ex.solved) {
-      document.getElementById("term-input").focus();
     }
   });
 
@@ -710,15 +627,14 @@ function onKey(e) {
     return;
   }
 
-  // Don't hijack typing in inputs/selects. The terminal input has its own handler.
+  // Don't hijack typing in inputs/selects.
   const tag = (e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "select" || tag === "textarea") return;
 
-  if (state.mode === "ex") {
-    if (e.key === "Enter" && state.ex.solved) {
-      e.preventDefault();
-      nextExercise();
-    }
+  // "/" jumps to Search from anywhere.
+  if (e.key === "/") {
+    e.preventDefault();
+    setMode("search");
     return;
   }
 

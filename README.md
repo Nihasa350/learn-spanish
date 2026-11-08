@@ -1,6 +1,6 @@
-# code-training
+# learn-spanish
 
-A tiny flashcard + multiple-choice app for learning to code by doing and repetition. Starting with **bash**.
+A tiny flashcard + multiple-choice app for learning **Spain Spanish** (castellano) by repetition. No build step: just static files.
 
 ## Run it
 
@@ -24,19 +24,24 @@ make rebuild              # builds from Dockerfile then runs
 Override ports: `make up PORT=9090`, `make serve PORT=9000`.
 
 `make up` bind-mounts the source directory into the container, so edits to
-`index.html` / `app.js` / `shell.js` / `data/*.js` show up on a browser refresh
+`index.html` / `app.js` / `data/*.js` show up on a browser refresh
 with no rebuild. `make rebuild` produces a portable image that includes the
 files (uses `docker-compose.build.yml` + the `Dockerfile`).
 
 ## What's in it
 
-- **Flashcards** — prompt → flip → rate yourself (knew it / got it wrong).
-- **Multiple choice** — pick the right command from 4 options.
-- **Exercises** — type real bash into a simulated terminal; we check the resulting filesystem / output. Supports `pwd`, `cd`, `ls`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `cat`, `echo`, `head`, `tail`, `wc`, `grep`, `sort`, `uniq`, plus pipes (`|`), redirects (`>` / `>>`), and chained commands (`&&`).
-- **Weighted practice** — items you get wrong resurface more often.
-- **Tag filter** — narrow to e.g. just `pipes` or `permissions`.
-- **Focus weak cards** — only practice ones you've been getting wrong.
-- Progress is saved per topic in `localStorage`.
+- **Two decks**, switched from the header:
+  - **Vocabulario**: ~120 common words and phrases (greetings, food, places, family, numbers…). Nouns come with their article so you learn the gender. Spain-specific words (coche, móvil, zumo, patata…) are noted.
+  - **Verbos**: present tense of ser, estar, tener and ir (including vosotros), plus short sentences that practise choosing the right verb.
+  - **Conversaciones**: 8 everyday dialogues (meeting someone, the bar, directions, the market, a restaurant, weekend plans, family, the train station). You play one part: each card shows what the other person just said and what you want to say, and you answer in Spanish. In multiple choice, the wrong options are other lines from the same conversation.
+- **Flashcards**: English prompt → flip → rate yourself (knew it / got it wrong).
+- **Multiple choice**: pick the right Spanish from 4 options. Wrong options come from related cards (other food words, other forms of the same verb), so you can't guess by elimination.
+- **Reference**: short grammar notes (ser vs estar, gender, articles, pronouns, conjugation tables) and the full script of each conversation with English translations. The ⓘ chips on cards open the relevant page.
+- **Search**: look up any word or phrase in English or Spanish across every deck, every conversation line (both speakers) and the grammar examples. Accents and punctuation are optional, so `cuanto es` finds *¿Cuánto es?*. Press <kbd>/</kbd> from anywhere to jump to it.
+- **Weighted practice**: cards you get wrong come up more often.
+- **Tag filter**: practise just e.g. `food` or `numbers`.
+- **Focus weak cards**: only practise cards you've been getting wrong.
+- Progress is saved per deck in `localStorage`.
 
 ## Keyboard shortcuts
 
@@ -48,7 +53,8 @@ files (uses `docker-compose.build.yml` + the `Dockerfile`).
 | Flashcards   | <kbd>S</kbd>               | Skip              |
 | Multi choice | <kbd>1</kbd>–<kbd>4</kbd>  | Choose answer     |
 | Multi choice | <kbd>Enter</kbd>           | Next card         |
-| Exercises    | <kbd>Enter</kbd>           | Run command (or advance once solved) |
+| Anywhere     | <kbd>/</kbd>               | Search            |
+| Anywhere     | <kbd>Esc</kbd>             | Close popup       |
 
 ## File layout
 
@@ -56,62 +62,43 @@ files (uses `docker-compose.build.yml` + the `Dockerfile`).
 index.html                  Markup + control bar
 style.css                   Styling (dark + light)
 app.js                      State, rendering, persistence, keyboard
-shell.js                    In-browser bash simulator (window.Shell)
-data/bash.js                Bash flashcards (window.BASH_CARDS)
-data/bash-exercises.js      Bash exercises (window.BASH_EXERCISES)
+data/vocab.js               Vocabulary deck (window.VOCAB_CARDS)
+data/verbs.js               Verb tables + generated conjugation cards (window.VERB_CARDS)
+data/grammar.js             Grammar notes for Reference + ⓘ chips (window.GRAMMAR_CONCEPTS)
+data/conversations.js       Dialogues → practice cards + Reference pages (window.CONVERSATION_CARDS)
+nginx.conf                  Sends Cache-Control: no-cache so a normal refresh picks up edits
 Dockerfile                  Self-contained nginx image
 docker-compose.yml          Dev compose: bind-mounts the source for live edits
 docker-compose.build.yml    Prod-ish compose: builds from Dockerfile
 Makefile                    `make help` for run shortcuts
 ```
 
-## Adding a new topic
+## Adding cards
 
-1. Create `data/<topic>.js` and assign `window.<TOPIC>_CARDS = [...]` using the same card shape as `data/bash.js`.
-2. Register it in `index.html` with another `<script src="data/<topic>.js">` line and add a topic chip in the header.
-3. Add a key in `TOPICS` in `app.js`.
+- **Vocabulary**: add a line to `data/vocab.js` with the `v(id, english, spanish, tags, extra)` helper.
+- **A new verb**: add it to `VERB_TABLES` in `data/verbs.js` (six forms in yo, tú, él, nosotros, vosotros, ellos order). The conjugation cards are generated automatically. To give it a Reference page, add an entry with the same key to `data/grammar.js`; its table fills in automatically.
+- **A conversation**: add an entry to `DIALOGUES` in `data/conversations.js`. Mark your lines with `you: true` and each one becomes a card. Add new lines at the end of a dialogue, because card ids include the line number.
+- **A new deck**: create `data/<deck>.js` assigning `window.<DECK>_CARDS = [...]`, load it in `index.html`, add a `.topic` button in the header, and register it in `TOPICS` in `app.js`.
 
 ## Card shape
 
 ```js
 {
-  id:      "unique-stable-id",      // used for progress tracking
-  prompt:  "What does X do?",
-  answer:  "the canonical command",
-  accept:  ["alt 1", "alt 2"],      // optional, for a future typing mode
-  explain: "short why/how note",    // optional, shown after answering
-  choices: ["distractor 1", ...],   // optional, else auto-sampled for MC
-  tags:    ["topic", "subtopic"],
-  level:   1                        // 1 = beginner, 3 = advanced
+  id:       "v-manzana",            // unique + stable: progress is keyed on it
+  prompt:   "the apple",            // English
+  answer:   "la manzana",           // Spanish
+  accept:   ["..."],                // optional other correct answers (for typing mode)
+  explain:  "short note",           // optional, shown after answering
+  concepts: ["gender"],             // optional keys into GRAMMAR_CONCEPTS → ⓘ chips
+  choices:  ["distractor", ...],    // optional, else auto-picked from related cards
+  tags:     ["food", "nouns"],
+  level:    1                       // 1 = beginner, 3 = advanced
 }
 ```
 
-## Exercise shape
+## Roadmap
 
-```js
-{
-  id:      "ex-mkdir",
-  prompt:  "Create a new directory called `projects`.",
-  hint:    "...",                  // optional
-  answer:  "mkdir projects",       // shown via Show answer
-  context: "...",                  // optional, rendered above the terminal
-  initial: { fs, cwd?, env? },     // starting state, deep-cloned per attempt
-  expect: {                        // all must pass; check after every Enter
-    noError: true,
-    cwd: "/home/user/projects",
-    stdoutTrimEquals: "...",
-    stdoutContains: ["foo", "bar"],
-    exists: "/home/user/projects",
-    isDir: "/path", isFile: "/path",
-    missing: "/path/old.txt",
-    fileContent: { path: "/file.txt", equals: "...", contains: "..." },
-  },
-  tags: ["files"],
-}
-```
-
-Use the `dir({...})` and `file("...")` helpers in `data/bash-exercises.js` to build the initial filesystem.
-
-## Planned
-
-- More topics: git, python, sql.
+1. ~~Spanish starter decks, grammar reference~~
+2. Typed-answer mode with accent-tolerant checking (á é í ó ú ñ ü ¿ ¡ helpers), and switching between English → Spanish and Spanish → English
+3. More verbs and tenses, generated conjugation drills, more grammar notes
+4. Audio (browser speech, es-ES voice), then spaced repetition
