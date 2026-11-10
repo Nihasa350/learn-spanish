@@ -3,7 +3,7 @@ services:
     image: nginx:alpine
     container_name: learn-spanish
     ports:
-      - "${PORT:-8080}:80"
+      - "127.0.0.1:${PORT:-8080}:80"   # local only; drop 127.0.0.1: to share on your network
     # Bind-mount the source so edits show up on browser refresh — no rebuild needed.
     # For a self-contained image instead, run `docker compose -f docker-compose.build.yml up`.
     volumes:
