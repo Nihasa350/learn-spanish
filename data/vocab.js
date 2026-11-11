@@ -46,20 +46,6 @@ window.VOCAB_CARDS = [
   v("como",    "how?",           "¿cómo?",    ["questions"], { accept: ["cómo"] }),
   v("cuanto",  "how much?",      "¿cuánto?",  ["questions"], { accept: ["cuánto"] }),
 
-  // --- Numbers ---
-  v("uno",    "one",    "uno",    ["numbers"]),
-  v("dos",    "two",    "dos",    ["numbers"]),
-  v("tres",   "three",  "tres",   ["numbers"]),
-  v("cuatro", "four",   "cuatro", ["numbers"]),
-  v("cinco",  "five",   "cinco",  ["numbers"]),
-  v("seis",   "six",    "seis",   ["numbers"]),
-  v("siete",  "seven",  "siete",  ["numbers"]),
-  v("ocho",   "eight",  "ocho",   ["numbers"]),
-  v("nueve",  "nine",   "nueve",  ["numbers"]),
-  v("diez",   "ten",    "diez",   ["numbers"]),
-  v("veinte", "twenty", "veinte", ["numbers"]),
-  v("cien",   "one hundred", "cien", ["numbers"]),
-
   // --- People & family ---
   v("hombre",  "the man",         "el hombre",  ["people", "nouns"], { concepts: ["gender"] }),
   v("mujer",   "the woman",       "la mujer",   ["people", "nouns"], { concepts: ["gender"] }),

@@ -15,6 +15,7 @@
       <nav class="topics">
         <button class="topic active" data-topic="vocab">Vocabulario</button>
         <button class="topic" data-topic="verbs">Verbos</button>
+        <button class="topic" data-topic="numbers">Números</button>
         <button class="topic" data-topic="conversations">Conversaciones</button>
       </nav>
     </header>
@@ -25,9 +26,18 @@
         <div class="seg" role="tablist" aria-label="Mode">
           <button class="seg-btn active" data-mode="flash">Flashcards</button>
           <button class="seg-btn" data-mode="mc">Multiple choice</button>
+          <button class="seg-btn" data-mode="type">Type</button>
           <button class="seg-btn" data-mode="ref">Reference</button>
           <button class="seg-btn" data-mode="search">Search <span class="kbd">/</span></button>
         </div>
+      </div>
+
+      <div class="control-group">
+        <label for="direction">Direction</label>
+        <select id="direction" title="Flashcards and multiple choice. Typing is always English → Spanish.">
+          <option value="en-es">English → Spanish</option>
+          <option value="es-en">Spanish → English</option>
+        </select>
       </div>
 
       <div class="control-group">
@@ -97,6 +107,43 @@
         </div>
       </section>
 
+      <!-- Typing mode (always English → Spanish) -->
+      <section id="type-view" class="view" aria-label="Type the Spanish">
+        <div class="card">
+          <div class="card-label">Type the Spanish</div>
+          <div class="card-text" id="type-prompt">Loading…</div>
+          <input
+            id="type-input"
+            class="type-input"
+            type="text"
+            lang="es"
+            placeholder="Escribe aquí…"
+            autocomplete="off"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            aria-label="Your answer in Spanish"
+          />
+          <div class="accent-row" id="accent-row" aria-label="Insert special characters">
+            <button type="button" data-char="á" title="Alt+A">á</button>
+            <button type="button" data-char="é" title="Alt+E">é</button>
+            <button type="button" data-char="í" title="Alt+I">í</button>
+            <button type="button" data-char="ó" title="Alt+O">ó</button>
+            <button type="button" data-char="ú" title="Alt+U">ú</button>
+            <button type="button" data-char="ñ" title="Alt+N">ñ</button>
+            <button type="button" data-char="ü">ü</button>
+            <button type="button" data-char="¿" title="Alt+?">¿</button>
+            <button type="button" data-char="¡" title="Alt+!">¡</button>
+          </div>
+          <div class="type-feedback" id="type-feedback" hidden></div>
+        </div>
+        <div class="row">
+          <button id="type-check" class="primary">Check <span class="kbd">Enter</span></button>
+          <button id="type-next" class="primary" hidden>Next <span class="kbd">Enter</span></button>
+          <button id="type-reveal" class="ghost">Show answer</button>
+        </div>
+      </section>
+
       <!-- Search mode (phrases from every deck, conversation and grammar example) -->
       <section id="search-view" class="view" aria-label="Search">
         <input
@@ -113,7 +160,7 @@
       <!-- Multiple choice mode -->
       <section id="mc-view" class="view" aria-label="Multiple choice">
         <div class="card">
-          <div class="card-label">Pick the Spanish</div>
+          <div class="card-label" id="mc-label">Pick the Spanish</div>
           <div class="card-text" id="mc-prompt">Loading…</div>
           <div class="mc-choices" id="mc-choices"></div>
           <div class="mc-feedback" id="mc-feedback" hidden></div>
@@ -144,6 +191,7 @@
     <script src="data/vocab.js"></script>
     <script src="data/verbs.js"></script>
     <script src="data/grammar.js"></script>
+    <script src="data/numbers.js"></script>
     <script src="data/conversations.js"></script>
     <script src="app.js"></script>
   </body>

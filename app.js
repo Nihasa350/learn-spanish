@@ -8,18 +8,21 @@
 const TOPICS = {
   vocab: () => window.VOCAB_CARDS || [],
   verbs: () => window.VERB_CARDS || [],
+  numbers: () => window.NUMBER_CARDS || [],
   conversations: () => window.CONVERSATION_CARDS || [],
 };
 
 const state = {
   topic: "vocab",
-  mode: "flash",        // "flash" | "mc" | "ref"
+  mode: "flash",        // "flash" | "mc" | "type" | "ref" | "search"
+  dir: "en-es",         // "en-es" | "es-en" (flashcards + MC; typing is always en-es)
   tag: "",              // active tag filter, "" = all
   weakOnly: false,
   pool: [],             // filtered cards
   current: null,
   flipped: false,
   mc: { choices: [], answered: false, correctIndex: -1 },
+  type: { answered: false },
   session: { seen: 0, correct: 0, wrong: 0 },
   progress: {},         // { [cardId]: { right, wrong, last } }
 };
@@ -178,12 +181,35 @@ function saveProgress() {
   try { localStorage.setItem(progressKey(state.topic), JSON.stringify(state.progress)); }
   catch {}
 }
-function recordResult(cardId, ok) {
-  const p = state.progress[cardId] || { right: 0, wrong: 0, last: 0 };
+// Spanish → English is tracked separately: recognising a word and producing it
+// are different skills. Typing always produces Spanish, so it uses the base id.
+function reversed() { return state.dir === "es-en" && state.mode !== "type"; }
+function progressId(card) { return reversed() ? `${card.id}@es-en` : card.id; }
+
+function recordResult(card, ok) {
+  const id = progressId(card);
+  const p = state.progress[id] || { right: 0, wrong: 0, last: 0 };
   if (ok) p.right += 1; else p.wrong += 1;
   p.last = Date.now();
-  state.progress[cardId] = p;
+  state.progress[id] = p;
   saveProgress();
+}
+
+function countResult(card, ok) {
+  state.session.seen += 1;
+  if (ok) state.session.correct += 1; else state.session.wrong += 1;
+  recordResult(card, ok);
+  updateStats();
+}
+
+// The prompt/answer pair for the current direction.
+function cardView(card) {
+  if (!reversed()) return { prompt: card.prompt, answer: card.answer, promptLang: "en", answerLang: "es" };
+  return {
+    prompt: (card.lookup && card.lookup.es) || card.answer,
+    answer: (card.lookup && card.lookup.en) || card.prompt,
+    promptLang: "es", answerLang: "en",
+  };
 }
 
 // ---------- Pool / weighting ----------
@@ -191,7 +217,7 @@ function applyFilters(items) {
   let pool = items.filter(it => !state.tag || (it.tags || []).includes(state.tag));
   if (state.weakOnly) {
     const weak = pool.filter(it => {
-      const p = state.progress[it.id];
+      const p = state.progress[progressId(it)];
       return !p || p.wrong > p.right;
     });
     if (weak.length) return weak;
@@ -216,7 +242,7 @@ function updatePoolStat() {
 function pickFrom(pool) {
   if (pool.length === 0) return null;
   const weights = pool.map(c => {
-    const p = state.progress[c.id] || { right: 0, wrong: 0 };
+    const p = state.progress[progressId(c)] || { right: 0, wrong: 0 };
     return Math.max(0.25, 1 + 2 * p.wrong - p.right);
   });
   const total = weights.reduce((a, b) => a + b, 0);
@@ -248,8 +274,13 @@ function renderFlash() {
     return;
   }
   state.flipped = false;
-  document.getElementById("flash-prompt").textContent = state.current.prompt;
-  document.getElementById("flash-answer").textContent = state.current.answer;
+  const v = cardView(state.current);
+  const promptEl = document.getElementById("flash-prompt");
+  const answerEl = document.getElementById("flash-answer");
+  promptEl.textContent = v.prompt;
+  promptEl.lang = v.promptLang;
+  answerEl.textContent = v.answer;
+  answerEl.lang = v.answerLang;
   document.getElementById("flash-explain").textContent = state.current.explain || "";
   document.querySelector("#flash-card .card-front").hidden = false;
   document.querySelector("#flash-card .card-back").hidden = true;
@@ -274,11 +305,7 @@ function flipFlash() {
 
 function rateFlash(rate) {
   if (!state.flipped || !state.current) return;
-  const ok = rate === "ok";
-  state.session.seen += 1;
-  if (ok) state.session.correct += 1; else state.session.wrong += 1;
-  recordResult(state.current.id, ok);
-  updateStats();
+  countResult(state.current, rate === "ok");
   const prevId = state.current.id;
   state.current = pickNextCard(prevId);
   renderFlash();
@@ -297,10 +324,11 @@ function sampleDistractors(card, n) {
   const tags = new Set(card.tags || []);
   const byAnswer = new Map();
   for (const c of TOPICS[state.topic]()) {
-    if (c.id === card.id || !c.answer || c.answer === card.answer) continue;
+    const answer = cardView(c).answer;
+    if (c.id === card.id || !answer || answer === cardView(card).answer) continue;
     const score = (c.tags || []).filter(t => tags.has(t)).length + Math.random() * 0.9;
-    const prev = byAnswer.get(c.answer);
-    if (prev === undefined || score > prev) byAnswer.set(c.answer, score);
+    const prev = byAnswer.get(answer);
+    if (prev === undefined || score > prev) byAnswer.set(answer, score);
   }
   return [...byAnswer.entries()]
     .sort((a, b) => b[1] - a[1])
@@ -310,11 +338,13 @@ function sampleDistractors(card, n) {
 
 function buildChoices(card) {
   // If the card author supplied choices, use them; else sample distractors.
+  // Author-supplied choices are Spanish, so they only apply English → Spanish.
+  const answer = cardView(card).answer;
   let choices;
-  if (card.choices && card.choices.length) {
-    choices = [...new Set([card.answer, ...card.choices])].slice(0, 4);
+  if (!reversed() && card.choices && card.choices.length) {
+    choices = [...new Set([answer, ...card.choices])].slice(0, 4);
   } else {
-    choices = [card.answer, ...sampleDistractors(card, 3)];
+    choices = [answer, ...sampleDistractors(card, 3)];
   }
   // shuffle
   for (let i = choices.length - 1; i > 0; i--) {
@@ -335,16 +365,20 @@ function renderMC() {
   const choices = buildChoices(card);
   state.mc.choices = choices;
   state.mc.answered = false;
-  state.mc.correctIndex = choices.indexOf(card.answer);
+  const v = cardView(card);
+  state.mc.correctIndex = choices.indexOf(v.answer);
 
-  document.getElementById("mc-prompt").textContent = card.prompt;
+  document.getElementById("mc-label").textContent = reversed() ? "Pick the English" : "Pick the Spanish";
+  const promptEl = document.getElementById("mc-prompt");
+  promptEl.textContent = v.prompt;
+  promptEl.lang = v.promptLang;
   const wrap = document.getElementById("mc-choices");
   wrap.innerHTML = "";
   choices.forEach((text, i) => {
     const btn = document.createElement("button");
     btn.className = "mc-choice";
     btn.dataset.index = String(i);
-    btn.innerHTML = `<span class="idx">${i + 1}</span><span lang="es">${escapeHtml(text)}</span>`;
+    btn.innerHTML = `<span class="idx">${i + 1}</span><span lang="${v.answerLang}">${escapeHtml(text)}</span>`;
     btn.addEventListener("click", () => answerMC(i));
     wrap.appendChild(btn);
   });
@@ -356,10 +390,7 @@ function answerMC(i) {
   if (state.mc.answered || !state.current) return;
   state.mc.answered = true;
   const ok = i === state.mc.correctIndex;
-  state.session.seen += 1;
-  if (ok) state.session.correct += 1; else state.session.wrong += 1;
-  recordResult(state.current.id, ok);
-  updateStats();
+  countResult(state.current, ok);
 
   const buttons = [...document.querySelectorAll(".mc-choice")];
   buttons.forEach((btn, idx) => {
@@ -373,7 +404,7 @@ function answerMC(i) {
   const lookup = explainRowHTML(cardConcepts(state.current));
   fb.innerHTML = `
     <div class="label">${ok ? "Correct" : "Not quite"}</div>
-    <div class="answer" lang="es">${escapeHtml(state.current.answer)}</div>
+    <div class="answer" lang="${cardView(state.current).answerLang}">${escapeHtml(cardView(state.current).answer)}</div>
     ${explain}
     ${lookup}
   `;
@@ -389,10 +420,140 @@ function nextMC() {
   renderMC();
 }
 
+// ---------- Typing view ----------
+// Compare typed Spanish to the answer (and `accept` alternatives), forgiving
+// case, punctuation and spacing. Missing accents count as correct but are
+// pointed out; a missing article or a one-letter slip is flagged as "close".
+const PUNCT = /[¿?¡!.,;:«»"“”'‘’…()]/g;
+const ARTICLE = /^(el|la|los|las|un|una|unos|unas)\s+/;
+
+function canon(s) {
+  return String(s || "").normalize("NFC").toLowerCase().replace(PUNCT, " ").replace(/\s+/g, " ").trim();
+}
+// Strip accent marks but keep ñ: año and ano are different words.
+function stripAccents(s) {
+  return s.normalize("NFC").replace(/ñ/g, "\u0000")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\u0000/g, "ñ");
+}
+function editDistance(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+// → { ok, kind: "exact" | "accents" | "article" | "close" | "wrong", target }
+function checkTyped(input, card) {
+  const typed = canon(input);
+  const targets = [card.answer, ...(card.accept || [])];
+  if (!typed) return { ok: false, kind: "wrong", target: card.answer };
+  for (const t of targets) if (canon(t) === typed) return { ok: true, kind: "exact", target: t };
+  for (const t of targets) {
+    if (stripAccents(canon(t)) === stripAccents(typed)) return { ok: true, kind: "accents", target: t };
+  }
+  for (const t of targets) {
+    const bare = canon(t).replace(ARTICLE, "");
+    if (bare !== canon(t) && stripAccents(bare) === stripAccents(typed)) return { ok: false, kind: "article", target: t };
+  }
+  for (const t of targets) {
+    const a = stripAccents(canon(t)), b = stripAccents(typed);
+    const allowed = a.length >= 12 ? 2 : a.length >= 5 ? 1 : 0;
+    if (allowed && editDistance(a, b) <= allowed) return { ok: false, kind: "close", target: t };
+  }
+  return { ok: false, kind: "wrong", target: card.answer };
+}
+
+function renderType() {
+  if (!state.current) state.current = pickNextCard(null);
+  const input = document.getElementById("type-input");
+  const fb = document.getElementById("type-feedback");
+  state.type.answered = false;
+  fb.hidden = true;
+  input.value = "";
+  input.readOnly = false;
+  input.classList.remove("ok", "bad");
+  document.getElementById("type-check").hidden = false;
+  document.getElementById("type-reveal").hidden = false;
+  document.getElementById("type-next").hidden = true;
+  if (!state.current) {
+    document.getElementById("type-prompt").textContent = "No cards match. Adjust the filter.";
+    return;
+  }
+  document.getElementById("type-prompt").textContent = state.current.prompt;
+  input.focus();
+}
+
+function finishType(result, revealed) {
+  const card = state.current;
+  const input = document.getElementById("type-input");
+  state.type.answered = true;
+  countResult(card, result.ok);
+  input.readOnly = true;
+  input.classList.toggle("ok", result.ok);
+  input.classList.toggle("bad", !result.ok);
+
+  const messages = {
+    exact:   "¡Correcto!",
+    accents: "Correct, but watch the accents:",
+    article: "Almost. Include the article, because it tells you the gender:",
+    close:   "Close! Check the spelling:",
+    wrong:   revealed ? "The answer is:" : "Not quite. The answer is:",
+  };
+  const fb = document.getElementById("type-feedback");
+  const showAnswer = result.kind !== "exact";
+  fb.className = `type-feedback ${result.ok ? "ok" : "bad"}`;
+  fb.innerHTML = `
+    <div class="label">${escapeHtml(messages[result.kind])}</div>
+    ${showAnswer ? `<div class="answer" lang="es">${escapeHtml(result.target)}</div>` : ""}
+    ${card.explain ? `<div class="type-explain">${escapeHtml(card.explain)}</div>` : ""}
+    ${explainRowHTML(cardConcepts(card))}
+  `;
+  fb.hidden = false;
+  document.getElementById("type-check").hidden = true;
+  document.getElementById("type-reveal").hidden = true;
+  document.getElementById("type-next").hidden = false;
+  input.focus();
+}
+
+function checkType() {
+  if (state.type.answered || !state.current) return;
+  const input = document.getElementById("type-input");
+  if (!canon(input.value)) { input.focus(); return; }
+  finishType(checkTyped(input.value, state.current), false);
+}
+
+function revealType() {
+  if (state.type.answered || !state.current) return;
+  finishType({ ok: false, kind: "wrong", target: state.current.answer }, true);
+}
+
+function nextType() {
+  const prevId = state.current ? state.current.id : null;
+  state.current = pickNextCard(prevId);
+  renderType();
+}
+
+// Insert a character at the cursor (accent buttons + Alt shortcuts).
+function insertChar(ch) {
+  const input = document.getElementById("type-input");
+  if (input.readOnly) return;
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = input.value.slice(0, start) + ch + input.value.slice(end);
+  input.selectionStart = input.selectionEnd = start + ch.length;
+  input.focus();
+}
+const ALT_CHARS = { a: "á", e: "é", i: "í", o: "ó", u: "ú", n: "ñ", "?": "¿", "/": "¿", "!": "¡", "1": "¡" };
+
 // ---------- Search view ----------
 // One flat index of { es, en, note, source, concept } built from every deck,
 // every conversation line and every grammar example. Built lazily, once.
-const TOPIC_LABELS = { vocab: "Vocabulario", verbs: "Verbos", conversations: "Conversaciones" };
+const TOPIC_LABELS = { vocab: "Vocabulario", verbs: "Verbos", numbers: "Números", conversations: "Conversaciones" };
 let searchIndex = null;
 
 // Lowercase, strip accents and punctuation so "cuanto es" matches "¿Cuánto es?".
@@ -418,7 +579,7 @@ function getSearchIndex() {
   };
 
   // Vocabulary + verbs. Conversation cards are skipped: their lines are indexed below.
-  for (const topic of ["vocab", "verbs"]) {
+  for (const topic of ["vocab", "verbs", "numbers"]) {
     for (const c of TOPICS[topic]()) {
       add({
         es: (c.lookup && c.lookup.es) || c.answer,
@@ -496,6 +657,7 @@ function setMode(mode) {
   document.querySelectorAll(".seg-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
   document.getElementById("flash-view").classList.toggle("active", mode === "flash");
   document.getElementById("mc-view").classList.toggle("active", mode === "mc");
+  document.getElementById("type-view").classList.toggle("active", mode === "type");
   document.getElementById("ref-view").classList.toggle("active", mode === "ref");
   document.getElementById("search-view").classList.toggle("active", mode === "search");
   state.current = null;
@@ -504,6 +666,7 @@ function setMode(mode) {
 
   if (mode === "flash") renderFlash();
   else if (mode === "mc") renderMC();
+  else if (mode === "type") renderType();
   else if (mode === "ref") renderRef();
   else if (mode === "search") {
     renderSearch();
@@ -566,7 +729,39 @@ function wire() {
     state.current = null;
     if (state.mode === "flash") renderFlash();
     else if (state.mode === "mc") renderMC();
+    else if (state.mode === "type") renderType();
   }
+
+  const dirSel = document.getElementById("direction");
+  dirSel.value = state.dir;
+  dirSel.addEventListener("change", e => {
+    state.dir = e.target.value;
+    try { localStorage.setItem("ls:dir", state.dir); } catch {}
+    refreshAfterFilterChange();
+  });
+
+  document.getElementById("type-check").addEventListener("click", checkType);
+  document.getElementById("type-reveal").addEventListener("click", revealType);
+  document.getElementById("type-next").addEventListener("click", nextType);
+  const typeInput = document.getElementById("type-input");
+  typeInput.addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (state.type.answered) nextType(); else checkType();
+      return;
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      const ch = ALT_CHARS[e.key.toLowerCase()];
+      if (ch) { e.preventDefault(); insertChar(e.shiftKey && ch.length === 1 && /[a-zñ]/i.test(e.key) ? ch.toUpperCase() : ch); }
+    }
+  });
+  // mousedown + preventDefault keeps focus (and the cursor position) in the input.
+  document.getElementById("accent-row").addEventListener("mousedown", e => {
+    const btn = e.target.closest("[data-char]");
+    if (!btn) return;
+    e.preventDefault();
+    insertChar(btn.dataset.char);
+  });
 
   document.getElementById("tag-filter").addEventListener("change", e => {
     state.tag = e.target.value;
@@ -664,6 +859,7 @@ function onKey(e) {
 
 // ---------- Boot ----------
 function boot() {
+  try { state.dir = localStorage.getItem("ls:dir") === "es-en" ? "es-en" : "en-es"; } catch {}
   loadProgress();
   populateTagFilter();
   rebuildPool();
